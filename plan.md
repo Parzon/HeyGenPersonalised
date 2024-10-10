@@ -111,3 +111,157 @@ We will break the plan into very specific tasks and follow a step-by-step approa
    - Build a long-term therapeutic record for each user.
 
 Once this plan is executed step by step, you will have a functional avatar app tailored for elderly adults, with integrated emotion tracking and data storage. Would you like to start with simplifying the user interface first, or move directly into integrating Hume API for sentiment detection?
+
+
+
+
+
+Iterations-
+The updated plan based on your latest feedback and critique from your superior highlights important structural and technical elements required for the development of your interactive avatar platform. Below is a more granular breakdown of the entire system, incorporating web sockets, voice analysis, user background detection, and more. This is intended to serve as a guiding document for development and can be shared with your team or experts for detailed review.
+
+---
+
+### **Detailed Plan for the Interactive Avatar System**
+
+---
+
+#### **1. Core Infrastructure Setup (Phase 1)**
+   
+   **Objective**: Establish the backend using **FastAPI** and the frontend using **Next.js** to facilitate WebSocket communication for real-time conversation, while keeping the system scalable and responsive.
+
+   **Steps**:
+
+   - **Backend**: 
+     - **FastAPI WebSocket Implementation**: Create an endpoint (`/ws/conversation`) to handle real-time bidirectional communication using `fastapi` and `uvicorn`. Ensure the backend can handle concurrent connections with asynchronous processing.
+     - **Text Streaming**: The backend should use OpenAI’s GPT API (via a Flask server in Python) to generate real-time responses and send them back to the frontend via WebSockets.
+     - **Frontend WebSocket Integration**: Establish persistent WebSocket connections in the Next.js frontend. Use event listeners to detect user inputs and stream responses back from the backend.
+
+   - **Testing**: Ensure real-time message exchange works smoothly and scale the system to handle concurrent connections.
+
+---
+
+#### **2. Simplified Avatar Interaction and UI (Phase 2)**
+
+   **Objective**: Remove unnecessary features from the avatar selection and streamline interaction for elderly users. Provide a simple choice between male and female avatars and an intuitive chat interface.
+
+   **Steps**:
+
+   - **Avatar Selection**: On the frontend, prompt the user to choose between a male or female avatar, as a simple two-button UI component.
+   - **Remove Unnecessary Links**: Strip away links like SDK, API Docs, and Avatars from the navigation bar. Focus solely on avatar interaction and messaging.
+   - **Conversation Flow**: Auto-initiate conversation after avatar selection, without requiring manual user actions.
+   - **Frontend**: Modify the current `InteractiveAvatar.tsx` to include only text interaction and remove any unnecessary setup for voice or knowledge IDs.
+
+---
+
+#### **3. User Background Detection (Phase 3)**
+
+   **Objective**: Analyze the user's background using OpenAI’s image API and store this data securely.
+
+   **Steps**:
+   
+   - **Image Capture**: When the session begins, capture a photo of the user via the front-end using the HTML5 camera API (with user consent).
+   - **Backend**: Send the image to OpenAI’s image analysis API and extract key information (e.g., background color, environment).
+   - **Data Storage**: Store the results of the background analysis in the SQLite database with a timestamp. This data should influence conversation personalization.
+   - **Frontend Modifications**: Add camera access prompts and logic to handle image capture and transfer to the backend. If the user declines, gracefully handle this by skipping the background analysis step.
+
+---
+
+#### **4. User Authentication and Authorization (Phase 4)**
+
+   **Objective**: Implement basic user authentication for both users and admin.
+
+   **Steps**:
+   
+   - **Backend**:
+     - **JWT Authentication**: Secure endpoints using JWTs (JSON Web Tokens) in FastAPI for user login, with roles for Users and Admins.
+     - **Admin Features**: The admin login will feature options to manage the knowledge base, such as deleting or adding information in ChromaDB.
+   
+   - **Frontend**: 
+     - Implement a basic login page for both users and admin. For admin, provide access to a dashboard that manages the knowledge base.
+     - Provide a “forgot password” option that triggers an email to the admin for recovery (as per your requirement).
+
+   - **Testing**: Ensure only authenticated users and admins can access the respective features.
+
+---
+
+#### **5. Emotion Detection Using Hume AI (Phase 5)**
+
+   **Objective**: Measure the user's emotional state during the conversation and display emotional insights in real-time.
+
+   **Steps**:
+   
+   - **Backend**:
+     - **Hume API Integration**: Once the user finishes speaking, the audio data is sent to Hume API for emotion detection. Process the Hume AI JSON response and store the emotional analysis alongside user interaction data with timestamps.
+     - **WebSocket Updates**: Continuously send emotion data back to the frontend to update the UI with real-time emotional feedback.
+
+   - **Frontend**:
+     - **Visual Feedback**: Display emotional indicators on the screen (e.g., an emoji or color gradient to reflect mood). Track and show the user’s emotional trajectory over time in a simple chart or text-based UI.
+   
+   - **Testing**: Test how accurately emotions are detected and ensure that feedback is shown correctly in real-time.
+
+---
+
+#### **6. WebSocket-Based Real-Time Text Interaction (Phase 6)**
+
+   **Objective**: Use WebSocket communication to enhance the speed of interactions between the user, OpenAI’s LLM, and HeyGen avatar text animations.
+
+   **Steps**:
+   
+   - **Frontend WebSocket Setup**: Create a persistent WebSocket connection from the Next.js frontend to the FastAPI backend to send user input and receive AI-generated text in real time.
+   - **Backend**: OpenAI’s GPT model generates responses based on user input, emotion analysis, and context from ChromaDB.
+   - **Text-To-Speech (HeyGen)**: Use the HeyGen avatar’s text-based speech animations, based on the text streamed from the backend.
+   - **Socket Disconnect Handling**: Implement socket reconnection logic to handle dropped connections.
+
+---
+
+#### **7. Knowledge Base Management (Admin Feature) (Phase 7)**
+
+   **Objective**: Allow admins to update and manage the knowledge base stored in ChromaDB, using metadata for querying and llama-index for chunking new additions.
+
+   **Steps**:
+   
+   - **Admin Dashboard**: Allow the admin to view existing knowledge entries in ChromaDB, delete them based on metadata, or add new documents.
+   - **Chunking Strategy**: For adding knowledge, implement LlamaIndex to chunk large documents before generating embeddings.
+   - **Knowledge Embedding**: Use OpenAI embeddings to store vector representations of text chunks in ChromaDB.
+   - **Testing**: Test CRUD operations on ChromaDB to ensure the knowledge base is updated correctly.
+
+---
+
+#### **8. Data Storage in ChromaDB and SQLite (Phase 8)**
+
+   **Objective**: Store user interaction data, including conversation history and emotional state, in both vector (ChromaDB) and structured (SQLite) databases.
+
+   **Steps**:
+   
+   - **ChromaDB**:
+     - Convert conversation history into vector embeddings after each session using OpenAI’s embedding models.
+     - Store these embeddings in ChromaDB for easy retrieval during future conversations.
+
+   - **SQLite**:
+     - Store user data (name, age, etc.) and therapeutic information.
+     - Log every conversation with timestamps, emotion data, and session metadata.
+
+   - **Testing**: Ensure correct data storage in both ChromaDB and SQLite. Verify the retrieval of stored vector embeddings for personalized conversations.
+
+---
+
+#### **9. Deployment on AWS (Phase 9)**
+
+   **Objective**: Deploy the entire application stack on AWS for scalability and availability.
+
+   **Steps**:
+   
+   - **Backend**: Use **AWS ECS** (Elastic Container Service) with **Fargate** to deploy containerized FastAPI and Next.js applications.
+   - **Database Hosting**: Deploy **PostgreSQL** on AWS RDS for session management and user data. Use AWS EC2 for hosting **ChromaDB**.
+   - **DNS and SSL**: Use **AWS Route 53** for DNS management and **AWS Certificate Manager** for SSL certificates.
+   - **Load Balancing and Scaling**: Implement load balancing and auto-scaling with **AWS Application Load Balancer** and configure CloudWatch for monitoring and logging.
+
+---
+
+### **Next Steps**
+
+- **Development Kickoff**: Begin with Phase 1 by setting up FastAPI, Next.js, and basic WebSocket communication.
+- **Review Points**: After completing each phase, review the progress and resolve any bugs or issues before moving on to the next phase.
+- **Testing and Feedback**: Throughout development, test each new feature or change extensively and gather user feedback to improve the interface and functionality.
+
+This approach ensures a step-by-step integration of core features, making it easier to debug and adapt the system as necessary. Let me know if you need further adjustments or if you're ready to proceed with development!
