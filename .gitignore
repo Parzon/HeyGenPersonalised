@@ -34,3 +34,10 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 .idea
+
+# python 
+env_keys.py
+*.py[cod]
+
+
+
