@@ -78,6 +78,10 @@ async def process_audio():
             audio.export(wav_path, format="wav")
             print(f"Conversion from WebM to WAV successful. Saved as: {wav_path}")
 
+            # Delete the original WebM file after successful conversion
+            os.remove(save_path)
+            print(f"Deleted original WebM file: {save_path}")
+
             # Check for silence
             silence_detected = detect_silence(wav_path)
             if silence_detected:
