@@ -26,9 +26,6 @@ if not os.path.exists(CSV_FILE):
 # Counter for unique naming
 counter = 1
 
-# Set up web server
-app = web.Application()
-
 # Replace this with your actual OpenAI API key retrieval function
 OPENAI_API_KEY = get_openai_api_key()
 openai.api_key = OPENAI_API_KEY
@@ -36,8 +33,11 @@ openai.api_key = OPENAI_API_KEY
 # Track start time of the session
 start_time = datetime.datetime.now()
 
+# Initialize an async queue for storing audio files to be processed
+audio_queue = None  # Will be initialized in main loop
+
 async def upload_audio(request):
-    global counter, start_time
+    global counter
 
     reader = await request.multipart()
     field = await reader.next()
@@ -58,71 +58,126 @@ async def upload_audio(request):
                 break
             f.write(chunk)
 
-    try:
-        # Convert WebM to WAV and save it
-        audio = AudioSegment.from_file(save_path, format="webm")
-        wav_path = save_path.replace(".webm", ".wav")
-        audio.export(wav_path, format="wav")
-        print(f"Conversion from WebM to WAV successful. Saved as: {wav_path}")
-
-        # Check for silence
-        if detect_silence(wav_path):
-            silent_wav_path = wav_path.replace(".wav", "_silence.wav")
-            os.rename(wav_path, silent_wav_path)
-            print(f"Silence detected. Renamed to: {silent_wav_path}")
-
-            # Check if both _1_silence.wav and _2_silence.wav exist
-            first_silence_path = os.path.join(UPLOAD_DIR, f"audio_{timestamp}_1_silence.wav")
-            second_silence_path = os.path.join(UPLOAD_DIR, f"audio_{timestamp}_2_silence.wav")
-            
-            if os.path.exists(first_silence_path) and os.path.exists(second_silence_path):
-                await start_conversation()
-
-        else:
-            print(f"No extended silence detected in: {wav_path}")
-
-    except Exception as e:
-        print(f"Error while processing audio file: {e}")
-        return web.Response(text="Failed to process audio", status=500)
+    # Add the audio file to the processing queue
+    await audio_queue.put(save_path)
+    print(f"Audio file {unique_filename} added to the processing queue.")
 
     return web.Response(text="Audio uploaded successfully", status=200)
 
-def detect_silence(audio_path, silence_threshold=-40.0, min_silence_duration=4900):
-    audio = AudioSegment.from_file(audio_path, format="wav")
-    silence_ranges = pydub_detect_silence(audio, min_silence_len=min_silence_duration, silence_thresh=silence_threshold)
-    return len(silence_ranges) > 0
+async def process_audio():
+    while True:
+        save_path = None
+        try:
+            # Get the next audio file from the queue
+            save_path = await audio_queue.get()
+            print(f"Processing audio file: {save_path}")
+
+            # Convert WebM to WAV
+            audio = AudioSegment.from_file(save_path, format="webm")
+            wav_path = save_path.replace(".webm", ".wav")
+            audio.export(wav_path, format="wav")
+            print(f"Conversion from WebM to WAV successful. Saved as: {wav_path}")
+
+            # Check for silence
+            silence_detected = detect_silence(wav_path)
+            if silence_detected:
+                silent_wav_path = wav_path.replace(".wav", "_silence.wav")
+                os.rename(wav_path, silent_wav_path)
+                print(f"Silence detected. Renamed to: {silent_wav_path}")
+
+                # Check if both _1_silence.wav and _2_silence.wav exist
+                base_filename = "_".join(os.path.basename(save_path).split("_")[:2])
+                first_silence_path = os.path.join(UPLOAD_DIR, f"{base_filename}_1_silence.wav")
+                second_silence_path = os.path.join(UPLOAD_DIR, f"{base_filename}_2_silence.wav")
+
+                # Log debug information about silence files
+                print(f"Checking for existence of: {first_silence_path} and {second_silence_path}")
+
+                if os.path.exists(first_silence_path) and os.path.exists(second_silence_path):
+                    print("Both silence files detected, initiating conversation starter.")
+                    await start_conversation()
+
+            else:
+                print(f"No extended silence detected in: {wav_path}")
+
+        except Exception as e:
+            print(f"Error while processing audio file {save_path if save_path else 'unknown'}: {e}")
+
+        finally:
+            if save_path is not None:
+                audio_queue.task_done()
 
 async def start_conversation():
     try:
-        # Use the standard OpenAI ChatCompletion API to generate a conversation starter
-        response = openai.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {"role": "system", "content": "You are a helpful assistant."},
-                {"role": "user", "content": "Say a conversation starter."}
-            ],
-            max_tokens=50,
-            n=1  # Ensure that only one response is generated
-        )
+        # Use aiohttp to call OpenAI API asynchronously
+        async with aiohttp.ClientSession() as session:
+            headers = {
+                "Authorization": f"Bearer {OPENAI_API_KEY}"
+            }
+            json_data = {
+                "model": "gpt-4o",
+                "messages": [
+                    {"role": "system", "content": "You are a helpful assistant."},
+                    {"role": "user", "content": "Say a conversation starter."}
+                ],
+                "max_tokens": 50,
+                "n": 1
+            }
 
-        # Extract the response message content
-        if response and len(response.choices) > 0:
-            message_content = response.choices[0].message
+            async with session.post("https://api.openai.com/v1/chat/completions", headers=headers, json=json_data) as resp:
+                response = await resp.json()
 
-            # Save to CSV
-            save_to_csv(datetime.datetime.now(), "AI", message_content)
-            print(f"Assistant response saved: {message_content}")
+                # Extract the response message content
+                if response and 'choices' in response and len(response['choices']) > 0:
+                    message_content = response['choices'][0]['message']['content']
+
+                    # Save to CSV
+                    save_to_csv(datetime.datetime.now(), "AI", message_content)
+                    print(f"Assistant response saved: {message_content}")
+                else:
+                    print(f"Unexpected response format from OpenAI API: {response}")
 
     except Exception as e:
         print(f"Error while generating conversation starter: {e}")
 
+def detect_silence(audio_path, silence_threshold=-40.0, min_silence_duration=4900):
+    try:
+        audio = AudioSegment.from_file(audio_path, format="wav")
+        silence_ranges = pydub_detect_silence(audio, min_silence_len=min_silence_duration, silence_thresh=silence_threshold)
+        print(f"Silence ranges detected in {audio_path}: {silence_ranges}")
+        return len(silence_ranges) > 0
+    except Exception as e:
+        print(f"Error during silence detection for {audio_path}: {e}")
+        return False
+
 def save_to_csv(timestamp, speaker, content):
     """Save transcription data to CSV."""
-    with open(CSV_FILE, mode='a', newline='') as file:
-        writer = csv.writer(file)
-        writer.writerow([timestamp.strftime('%Y-%m-%d %H:%M:%S'), speaker, content])
+    try:
+        with open(CSV_FILE, mode='a', newline='') as file:
+            writer = csv.writer(file)
+            writer.writerow([timestamp.strftime('%Y-%m-%d %H:%M:%S'), speaker, content])
+    except Exception as e:
+        print(f"Error while saving to CSV: {e}")
 
-app.router.add_post("/upload_audio", upload_audio)
+async def init_app():
+    global audio_queue
+
+    # Initialize the web app
+    app = web.Application()
+    app.router.add_post("/upload_audio", upload_audio)
+
+    # Initialize the async queue
+    audio_queue = asyncio.Queue()
+
+    # Start the background task to process audio
+    loop = asyncio.get_running_loop()
+    loop.create_task(process_audio())
+
+    return app
 
 if __name__ == "__main__":
-    web.run_app(app, port=8000)
+    try:
+        # Run the web server with the initialized app
+        web.run_app(init_app(), port=8000)
+    except Exception as e:
+        print(f"Server failed to start: {e}")
