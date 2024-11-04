@@ -15,7 +15,7 @@
     "jsx": "preserve",
     "incremental": true,
     "downlevelIteration": true,
-    "typeRoots": ["./types", "./node_modules/@types"], // Added typeRoots to include custom types
+    "typeRoots": ["./types", "./node_modules/@types"], // Updated to include custom types
     "plugins": [
       {
         "name": "next"

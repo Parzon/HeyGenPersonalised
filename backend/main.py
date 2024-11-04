@@ -7,178 +7,103 @@ import json
 import csv
 import hashlib
 import threading
+import base64
+import numpy as np
+import cv2
 from aiohttp import web
 from pydub import AudioSegment
 from pydub.silence import detect_silence as pydub_detect_silence
-from env_keys import get_openai_api_key
+from env_keys import get_openai_api_key, get_hume_api_key
 
-# Set up upload directory
+# Set up directories and API keys
 UPLOAD_DIR = "uploaded_audio"
-if not os.path.exists(UPLOAD_DIR):
-    os.makedirs(UPLOAD_DIR)
-
-# CSV to save conversation
+INCOMING_FRAMES_DIR = "incoming_frames"
+DETECTED_FRAMES_DIR = "detected_frames"
 CSV_FILE = "conversation_transcripts.csv"
+
+# Ensure directories exist
+for directory in [UPLOAD_DIR, INCOMING_FRAMES_DIR, DETECTED_FRAMES_DIR]:
+    if not os.path.exists(directory):
+        os.makedirs(directory)
+
+# Set up CSV for conversation transcripts
 if not os.path.exists(CSV_FILE):
     with open(CSV_FILE, mode='w', newline='') as file:
         writer = csv.writer(file)
         writer.writerow(['Timestamp', 'Speaker', 'Content'])
 
-# Replace this with your actual OpenAI API key retrieval function
+# API keys
 OPENAI_API_KEY = get_openai_api_key()
+HUME_API_KEY = get_hume_api_key()
 openai.api_key = OPENAI_API_KEY
 
-# Track start time of the session
+# Global variables
 start_time = datetime.datetime.now()
-
-# Counter for unique naming
 file_counter = 1
-
-# Hashes of processed files to check for duplicates
 processed_hashes = set()
-
-# Lock to manage concurrent file writing
 write_lock = threading.Lock()
+face_detected_flag = False  # Global flag for face detection
 
 async def upload_audio(request):
     global file_counter
-
     reader = await request.multipart()
     field = await reader.next()
 
-    # Generate a unique filename with timestamp and counter
     timestamp = datetime.datetime.now().strftime('%Y%m%d%H%M%S%f')
     unique_filename = f"audio_{timestamp}_{file_counter}.wav"
     save_path = os.path.join(UPLOAD_DIR, unique_filename)
 
-    # Write the file to disk using a lock to prevent concurrency issues
     with write_lock:
         with open(save_path, 'wb') as f:
             while True:
-                chunk = await field.read_chunk()  # 8192 bytes by default.
+                chunk = await field.read_chunk()
                 if not chunk:
                     break
                 f.write(chunk)
 
-    # Process the audio file and decide whether to keep it
     is_valid = await process_audio(save_path)
-
-    # Increment the counter only if the file is not a duplicate and is valid
     if is_valid:
         file_counter += 1
 
     return web.Response(text="Audio uploaded successfully", status=200)
 
-async def process_audio(save_path):
-    try:
-        print(f"Processing audio file: {save_path}")
+async def detect_face(request):
+    global face_detected_flag  # Access the global flag
 
-        # Load the WAV file using pydub
-        try:
-            audio = AudioSegment.from_file(save_path, format="wav")
-        except Exception as e:
-            print(f"Failed to load {save_path}. Error: {e}")
-            os.remove(save_path)
-            return False
+    if face_detected_flag:
+        return web.json_response({"face_detected": False, "message": "Face already detected, stopping further processing."})
 
-        # Hash the audio content to ensure no duplicates
-        audio_hash = hashlib.md5(audio.raw_data).hexdigest()
-        if is_duplicate(audio_hash):
-            print(f"Duplicate audio detected, deleting: {save_path}")
-            os.remove(save_path)
-            return False
+    reader = await request.multipart()
+    file = await reader.next()
 
-        # Save the hash to prevent future duplicates
-        save_hash(audio_hash)
+    if not file:
+        return web.json_response({"error": "No file provided"}, status=400)
 
-        # Check for silence
-        silence_detected = detect_silence(save_path)
-        if silence_detected:
-            silent_wav_path = save_path.replace(".wav", "_silence.wav")
-            os.rename(save_path, silent_wav_path)
-            print(f"Silence detected. Renamed to: {silent_wav_path}")
+    contents = await file.read()
+    timestamp = datetime.datetime.now().strftime('%Y%m%d%H%M%S%f')
+    incoming_image_path = os.path.join(INCOMING_FRAMES_DIR, f"frame_{timestamp}.png")
 
-            # Check if both _1_silence.wav and _2_silence.wav exist
-            base_filename = "_".join(os.path.basename(silent_wav_path).split("_")[:2])
-            first_silence_path = os.path.join(UPLOAD_DIR, f"{base_filename}_1_silence.wav")
-            second_silence_path = os.path.join(UPLOAD_DIR, f"{base_filename}_2_silence.wav")
+    with open(incoming_image_path, 'wb') as f:
+        f.write(contents)
 
-            # Log debug information about silence files
-            print(f"Checking for existence of: {first_silence_path} and {second_silence_path}")
+    np_array = np.frombuffer(contents, np.uint8)
+    image = cv2.imdecode(np_array, cv2.IMREAD_COLOR)
+    face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
 
-            if os.path.exists(first_silence_path) and os.path.exists(second_silence_path):
-                print("Both silence files detected, initiating conversation starter.")
-                await start_conversation()
-
-        else:
-            print(f"No extended silence detected in: {save_path}")
-
-        return True
-
-    except Exception as e:
-        print(f"Error while processing audio file {save_path if save_path else 'unknown'}: {e}")
-        return False
-
-def detect_silence(audio_path, silence_threshold=-40.0, min_silence_duration=4900):
-    try:
-        audio = AudioSegment.from_file(audio_path, format="wav")
-        silence_ranges = pydub_detect_silence(audio, min_silence_len=min_silence_duration, silence_thresh=silence_threshold)
-        print(f"Silence ranges detected in {audio_path}: {silence_ranges}")
-        return len(silence_ranges) > 0
-    except Exception as e:
-        print(f"Error during silence detection for {audio_path}: {e}")
-        return False
-
-async def start_conversation():
-    try:
-        async with aiohttp.ClientSession() as session:
-            headers = {
-                "Authorization": f"Bearer {OPENAI_API_KEY}"
-            }
-            json_data = {
-                "model": "gpt-4o",
-                "messages": [
-                    {"role": "system", "content": "You are a helpful assistant."},
-                    {"role": "user", "content": "Say a conversation starter."}
-                ],
-                "max_tokens": 50,
-                "n": 1
-            }
-
-            async with session.post("https://api.openai.com/v1/chat/completions", headers=headers, json=json_data) as resp:
-                response = await resp.json()
-
-                # Extract the response message content
-                if response and 'choices' in response and len(response['choices']) > 0:
-                    message_content = response['choices'][0]['message']['content']
-
-                    # Save to CSV
-                    save_to_csv(datetime.datetime.now(), "AI", message_content)
-                    print(f"Assistant response saved: {message_content}")
-                else:
-                    print(f"Unexpected response format from OpenAI API: {response}")
-
-    except Exception as e:
-        print(f"Error while generating conversation starter: {e}")
-
-def save_to_csv(timestamp, speaker, content):
-    try:
-        with open(CSV_FILE, mode='a', newline='') as file:
-            writer = csv.writer(file)
-            writer.writerow([timestamp.strftime('%Y-%m-%d %H:%M:%S'), speaker, content])
-    except Exception as e:
-        print(f"Error while saving to CSV: {e}")
-
-def is_duplicate(audio_hash):
-    return audio_hash in processed_hashes
-
-def save_hash(audio_hash):
-    processed_hashes.add(audio_hash)
+    if len(faces) > 0:
+        detected_image_path = os.path.join(DETECTED_FRAMES_DIR, f"detected_face_{timestamp}.png")
+        cv2.imwrite(detected_image_path, image)
+        face_detected_flag = True  # Set the flag when a face is detected
+        return web.json_response({"face_detected": True, "filename": detected_image_path})
+    else:
+        return web.json_response({"face_detected": False, "filename": incoming_image_path})
 
 async def init_app():
-    # Initialize the web app
     app = web.Application()
     app.router.add_post("/upload_audio", upload_audio)
+    app.router.add_post("/detect_face", detect_face)
     return app
 
 if __name__ == "__main__":
