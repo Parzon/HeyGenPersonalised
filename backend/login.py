@@ -210,6 +210,14 @@ def save_face_analysis_to_db(username, initial_mood):
                   (initial_mood, username, login_timestamp, session_id))
         conn.commit()  # Ensure changes are committed
         print(f"Updated mood for {username} at {login_timestamp} with {initial_mood}")
+
+        # delete the captured face image uploaded_images/captured_face.png
+        file_path = 'uploaded_images/captured_face.png'
+        if os.path.exists(file_path):
+            os.remove(file_path)
+            print(f"Deleted the captured face image: {file_path}")
+
+        
         
     except sqlite3.Error as e:
         print(f"Error saving face analysis: {e}")

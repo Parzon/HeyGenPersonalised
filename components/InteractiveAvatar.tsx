@@ -2,24 +2,53 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import axios from 'axios';
-import Recorder from 'recorder-js';
 
 const InteractiveAvatar = () => {
-  const recorderRef = useRef<Recorder | null>(null);
-  const audioContextRef = useRef<AudioContext | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const [audioCounter, setAudioCounter] = useState(1);
   const [timestamp] = useState(new Date().toISOString().replace(/[-:T]/g, '').split('.')[0]);
+  const chunksRef = useRef<Blob[]>([]);
+  const isRecordingRef = useRef<boolean>(false);
 
   useEffect(() => {
+    let mediaRecorder: MediaRecorder;
+
     navigator.mediaDevices.getUserMedia({ audio: true })
       .then((stream) => {
-        audioContextRef.current = new AudioContext();
-        recorderRef.current = new Recorder(audioContextRef.current, {
-          onAnalysed: (data: any) => {
-            console.log("Audio analysis data:", data);
-          },
-        });
-        recorderRef.current.init(stream);
+        mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+        mediaRecorderRef.current = mediaRecorder;
+
+        mediaRecorder.ondataavailable = function (e) {
+          if (e.data.size > 0) {
+            chunksRef.current.push(e.data);
+          }
+        };
+
+        mediaRecorder.onstop = function () {
+          // Combine chunks into a Blob
+          const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
+          chunksRef.current = []; // Reset chunks
+
+          // Generate filename with timestamp and audio counter
+          const currentCount = audioCounter;
+          const filename = `${timestamp}_${currentCount}.webm`;
+
+          // Send audio chunk and update the counter only after successful upload
+          sendAudioChunk(blob, filename)
+            .then(() => {
+              setAudioCounter(prev => prev + 1); // Increment the counter only after a successful upload
+              // Restart recording immediately
+              startRecording();
+            })
+            .catch((error: Error) => {
+              console.error("Error uploading audio chunk:", error);
+              // Optionally, handle retry logic here
+              // Restart recording even if upload fails
+              startRecording();
+            });
+        };
+
+        // Start the recording loop
         startRecording();
       })
       .catch((err: Error) => {
@@ -27,39 +56,24 @@ const InteractiveAvatar = () => {
       });
 
     return () => {
-      if (recorderRef.current) {
-        recorderRef.current.stop();
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+        mediaRecorderRef.current.stop();
       }
     };
   }, []);
 
   const startRecording = () => {
-    recorderRef.current?.start()
-      .then(() => {
-        console.log("Recording started...");
-        setTimeout(stopRecording, 4500); // Record for 5 seconds
-      });
-  };
-
-  const stopRecording = () => {
-    recorderRef.current?.stop()
-      .then(({ blob }: { blob: Blob }) => {
-        console.log("Recording stopped...");
-
-        // Generate filename with timestamp and audio counter
-        const currentCount = audioCounter;
-        const filename = `${timestamp}_${currentCount}.wav`;
-
-        // Send audio chunk and update the counter only after successful upload
-        sendAudioChunk(blob, filename)
-          .then(() => {
-            setAudioCounter(prev => prev + 1); // Increment the counter only after a successful upload
-            startRecording(); // Start the next recording
-          });
-      })
-      .catch((error: Error) => {
-        console.error("Error stopping recording:", error);
-      });
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'inactive') {
+      mediaRecorderRef.current.start();
+      isRecordingRef.current = true;
+      // Stop recording after 5 seconds
+      setTimeout(() => {
+        if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+          mediaRecorderRef.current.stop();
+          isRecordingRef.current = false;
+        }
+      }, 5000);
+    }
   };
 
   const sendAudioChunk = async (audioBlob: Blob, filename: string) => {
@@ -75,6 +89,7 @@ const InteractiveAvatar = () => {
       console.log('Audio uploaded successfully', response);
     } catch (error) {
       console.error('Error uploading audio', error);
+      throw error; // Re-throw error to handle in the calling function
     }
   };
 
