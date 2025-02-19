@@ -51,7 +51,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ✅ WebSocket Endpoint for Face Detection & Emotion Analysis
+# ------------------------------------------------
+# WEB SOCKET ENDPOINT
+# ------------------------------------------------
 @app.websocket("/ws/video")
 async def websocket_video_endpoint(websocket: WebSocket):
     """Handles WebSocket video frames for face detection and emotion analysis."""
@@ -71,7 +73,7 @@ async def websocket_video_endpoint(websocket: WebSocket):
                 await websocket.send_json({"error": "Empty frame received"})
                 continue
 
-            # ✅ Convert byte data to OpenCV image
+            # Convert byte data to OpenCV image
             np_arr = np.frombuffer(data, np.uint8)
             image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
 
@@ -80,19 +82,19 @@ async def websocket_video_endpoint(websocket: WebSocket):
                 await websocket.send_json({"error": "Invalid image data"})
                 continue
 
-            # Synchronous face detection (remove 'await'!)
+            # Detect faces
             faces = emotion_analyzer.detect_faces_opencv(image)
 
             if len(faces) > 0:
                 now = datetime.datetime.now()
 
-                # ✅ Ensure storage only once per minute
+                # Store once per minute
                 if (now - last_face_time).seconds >= 60:
                     face_path = os.path.join(FACE_DIR, f"{session_id}_{now.strftime('%H%M%S')}.png")
                     cv2.imwrite(face_path, image)
                     last_face_time = now
 
-                    # ✅ Analyze face by passing the NumPy image (not the path!)
+                    # Analyze face
                     emotions = await emotion_analyzer.analyze_face(image)
                     logger.info(f"Stored face & detected emotions: {emotions}")
 
@@ -115,5 +117,78 @@ async def websocket_video_endpoint(websocket: WebSocket):
     finally:
         logger.info("✅ WebSocket connection closed.")
 
+
+# ------------------------------------------------
+# AUDIO UPLOAD & TRANSCRIPTION ENDPOINT
+# ------------------------------------------------
+@app.post("/upload_audio")
+async def upload_audio(file: UploadFile = File(...), session_id: str = Form(...)):
+    """
+    Receives audio chunks from the client, converts them to WAV,
+    transcribes them with OpenAI, and returns a GPT response.
+    """
+
+    # ----------------------------
+    # 1) Save Audio to Disk
+    # ----------------------------
+    file_bytes = await file.read()
+    saved_path = await audio_processor.save_audio_file(file_bytes, file.filename)
+
+    # ----------------------------
+    # 2) Convert to WAV
+    # ----------------------------
+    wav_path = await audio_processor.convert_to_wav(saved_path)
+
+    # ----------------------------
+    # 3) Optional: Detect Silence
+    # ----------------------------
+    is_silent = await audio_processor.detect_silence(wav_path, min_silence_len=3000, silence_thresh=-40)
+    if is_silent:
+        logger.info(f"Session {session_id}: Silence detected, skipping transcription.")
+        return {
+            "session_id": session_id,
+            "transcript": "",
+            "response": "No audible speech detected."
+        }
+
+    # ----------------------------
+    # 4) Transcribe with OpenAI
+    # ----------------------------
+    transcription = await audio_processor.transcribe_audio(wav_path, OPENAI_API_KEY)
+    logger.info(f"Session {session_id}: Transcription => {transcription}")
+
+    if not transcription:
+        return {
+            "session_id": session_id,
+            "transcript": "",
+            "response": "Transcription failed or was empty."
+        }
+
+    # ----------------------------
+    # 5) Generate GPT Response
+    # ----------------------------
+    # We'll gather the entire response from the streaming generator.
+    # If you prefer a simpler approach, you can do a non-stream call.
+    response_chunks = []
+    async for chunk in response_generator.generate_response(transcription):
+        response_chunks.append(chunk)
+    ai_response = "".join(response_chunks)
+
+    # ----------------------------
+    # 6) Update Conversation Memory
+    # ----------------------------
+    conversation_memory.add_interaction(user_input=transcription, ai_response=ai_response)
+
+    # Return the final transcript & GPT response
+    return {
+        "session_id": session_id,
+        "transcript": transcription,
+        "response": ai_response
+    }
+
+
+# ------------------------------------------------
+# MAIN ENTRYPOINT
+# ------------------------------------------------
 if __name__ == "__main__":
     uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True)
