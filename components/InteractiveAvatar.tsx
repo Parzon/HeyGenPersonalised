@@ -1,101 +1,171 @@
 "use client";
 
-import React, { useEffect, useRef, useState } from 'react';
-import axios from 'axios';
+import React, { useEffect, useRef, useState } from "react";
+import axios from "axios";
 
 const InteractiveAvatar = () => {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
   const [audioCounter, setAudioCounter] = useState(1);
-  const [timestamp] = useState(new Date().toISOString().replace(/[-:T]/g, '').split('.')[0]);
   const chunksRef = useRef<Blob[]>([]);
   const isRecordingRef = useRef<boolean>(false);
+  const wsRef = useRef<WebSocket | null>(null);
+  const [sessionId] = useState(() => `session_${Date.now()}`);
 
   useEffect(() => {
     let mediaRecorder: MediaRecorder;
 
-    navigator.mediaDevices.getUserMedia({ audio: true })
+    // Request camera and microphone access
+    navigator.mediaDevices
+      .getUserMedia({ audio: true, video: true })
       .then((stream) => {
-        mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          videoRef.current.muted = true; // Prevents audio feedback
+        }
+
+        mediaRecorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
         mediaRecorderRef.current = mediaRecorder;
 
-        mediaRecorder.ondataavailable = function (e) {
+        mediaRecorder.ondataavailable = (e) => {
           if (e.data.size > 0) {
             chunksRef.current.push(e.data);
           }
         };
 
-        mediaRecorder.onstop = function () {
-          // Combine chunks into a Blob
-          const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
-          chunksRef.current = []; // Reset chunks
+        mediaRecorder.onstop = async () => {
+          const blob = new Blob(chunksRef.current, { type: "audio/webm" });
+          chunksRef.current = [];
+          const filename = `${sessionId}_${audioCounter}.webm`;
 
-          // Generate filename with timestamp and audio counter
-          const currentCount = audioCounter;
-          const filename = `${timestamp}_${currentCount}.webm`;
-
-          // Send audio chunk and update the counter only after successful upload
-          sendAudioChunk(blob, filename)
-            .then(() => {
-              setAudioCounter(prev => prev + 1); // Increment the counter only after a successful upload
-              // Restart recording immediately
-              startRecording();
-            })
-            .catch((error: Error) => {
-              console.error("Error uploading audio chunk:", error);
-              // Optionally, handle retry logic here
-              // Restart recording even if upload fails
-              startRecording();
-            });
+          await sendAudioChunk(blob, filename);
+          setAudioCounter((prev) => prev + 1);
+          startRecording(); // Restart recording
         };
 
-        // Start the recording loop
         startRecording();
       })
-      .catch((err: Error) => {
-        console.error('Error accessing microphone', err);
-      });
+      .catch((err) => console.error("Error accessing media devices", err));
+
+    startWebSocketConnection();
 
     return () => {
-      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-        mediaRecorderRef.current.stop();
+      console.log("🔻 Cleaning up WebSocket & Media Stream...");
+      if (mediaRecorderRef.current?.state !== "inactive") {
+        mediaRecorderRef.current?.stop();
       }
+      wsRef.current?.close(); // Close WebSocket on unmount
     };
   }, []);
 
+  // Start recording audio
   const startRecording = () => {
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'inactive') {
+    if (!mediaRecorderRef.current) return;
+    if (mediaRecorderRef.current.state === "inactive") {
       mediaRecorderRef.current.start();
       isRecordingRef.current = true;
-      // Stop recording after 5 seconds
       setTimeout(() => {
-        if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+        if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
           mediaRecorderRef.current.stop();
           isRecordingRef.current = false;
         }
-      }, 5000);
+      }, 4000);
     }
   };
 
+  // Send audio chunk to backend
   const sendAudioChunk = async (audioBlob: Blob, filename: string) => {
     const formData = new FormData();
-    formData.append('file', audioBlob, filename);
+    formData.append("file", audioBlob, filename);
+    formData.append("session_id", sessionId);
 
     try {
-      const response = await axios.post('http://localhost:8000/upload_audio', formData, {
-        headers: {
-          'Content-Type': 'multipart/form-data',
-        },
+      const response = await axios.post("http://localhost:8000/upload_audio", formData, {
+        headers: { "Content-Type": "multipart/form-data" },
       });
-      console.log('Audio uploaded successfully', response);
+      console.log("✅ Audio uploaded successfully:", response.data);
     } catch (error) {
-      console.error('Error uploading audio', error);
-      throw error; // Re-throw error to handle in the calling function
+      console.error("🚨 Error uploading audio:", error);
     }
   };
+
+  // WebSocket connection setup
+  const startWebSocketConnection = () => {
+    if (wsRef.current && wsRef.current.readyState !== WebSocket.CLOSED) {
+      console.warn("⚠️ WebSocket already exists, skipping new connection.");
+      return;
+    }
+
+    const websocket = new WebSocket("ws://localhost:8000/ws/video");
+    wsRef.current = websocket;
+
+    websocket.onopen = () => {
+      console.log("✅ WebSocket connected");
+    };
+
+    websocket.onmessage = (event) => {
+      console.log("📩 Server response:", event.data);
+    };
+
+    websocket.onerror = (error) => {
+      console.error("🚨 WebSocket error:", error);
+    };
+
+    websocket.onclose = (event) => {
+      console.log("❌ WebSocket closed", event);
+      if (!event.wasClean) {
+        console.warn("⚠️ WebSocket closed unexpectedly. Attempting reconnect...");
+        setTimeout(startWebSocketConnection, 5000);
+      }
+    };
+  };
+
+  // Capture and send video frame to WebSocket
+  const sendVideoFrame = () => {
+    if (!videoRef.current || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+      return;
+    }
+
+    // Debug logs
+    console.log("Attempting to send a frame...");
+    console.log("videoWidth:", videoRef.current.videoWidth, "videoHeight:", videoRef.current.videoHeight);
+
+    const canvas = document.createElement("canvas");
+    const context = canvas.getContext("2d");
+    if (!context) {
+      console.warn("Canvas 2D context not available");
+      return;
+    }
+
+    canvas.width = videoRef.current.videoWidth;
+    canvas.height = videoRef.current.videoHeight;
+    context.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
+
+    canvas.toBlob((blob) => {
+      if (blob) {
+        console.log("Sending frame blob of size:", blob.size);
+        wsRef.current?.send(blob);
+      } else {
+        console.warn("Canvas toBlob() returned null. Possibly 0x0 canvas dimensions?");
+      }
+    }, "image/png");
+  };
+
+  // Send video frames every 3 seconds
+  useEffect(() => {
+    const interval = setInterval(sendVideoFrame, 3000);
+    return () => clearInterval(interval);
+  }, []);
 
   return (
     <div>
-      <p>Recording in progress...</p>
+      <p>🎥 Recording & Streaming in progress...</p>
+      <video
+        ref={videoRef}
+        autoPlay
+        playsInline
+        style={{ width: "320px", height: "auto" }}
+      />
     </div>
   );
 };

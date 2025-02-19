@@ -1,90 +1,79 @@
-import os
+import cv2
 import asyncio
-import json
 import logging
-from hume import HumeStreamClient
-from hume.models.config import ProsodyConfig
-from hume.error.hume_client_exception import HumeClientException
+import os
+import numpy as np
+from hume import AsyncHumeClient
+from hume.expression_measurement.stream import Config
+from hume.expression_measurement.stream.socket_client import StreamConnectOptions
 from env_keys import get_hume_api_key
-import matplotlib.pyplot as plt
 
-# Configure logging
+# ✅ Load Hume API Key
+HUME_API_KEY = get_hume_api_key()
+
+# ✅ Explicitly define the Haar cascade path
+HAAR_CASCADE_PATH = "/Users/Parzon/anaconda3/envs/heygenexec/share/opencv4/haarcascades/haarcascade_frontalface_default.xml"
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Set up your API key and configuration
-hume_api_key = get_hume_api_key()
+class EmotionAnalyzer:
+    def __init__(self, hume_api_key: str):
+        self.hume_api_key = hume_api_key
+        self.face_cascade = cv2.CascadeClassifier(HAAR_CASCADE_PATH)  # ✅ Load classifier once
 
-# Perform Hume emotion analysis on a given audio file
-async def analyze_audio(file_path):
-    client = HumeStreamClient(hume_api_key)
-    config = ProsodyConfig()
+        if self.face_cascade.empty():
+            logger.error("Failed to load Haar cascade for face detection.")
 
-    retries = 3
-    for attempt in range(retries):
+    def detect_faces_opencv(self, image: np.ndarray):
+        """
+        Uses OpenCV Haar cascades to detect faces (synchronous).
+        """
+        if image is None or not isinstance(image, np.ndarray):
+            logger.error("Invalid image provided for face detection.")
+            return []
+
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        faces = self.face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5)
+        return faces
+
+    async def analyze_face(self, image: np.ndarray):
+        """
+        Sends an image (NumPy array) to Hume AI for emotion analysis asynchronously.
+        """
         try:
-            async with client.connect([config]) as socket:
-                result = await socket.send_file(file_path)
-                return result
-        except HumeClientException as e:
-            logger.error(f"Error during audio analysis (attempt {attempt + 1}): {e}")
-            if attempt < retries - 1:
-                await asyncio.sleep(2 ** attempt)
-            else:
-                logger.error("Exceeded maximum retries for audio analysis.")
-                return None
+            # Save image temporarily
+            image_path = "/tmp/temp_face.jpg"
+            cv2.imwrite(image_path, image)
 
-# Plot emotional analysis over time
-def plot_emotions_over_time(prosody_data, file_name):
-    if not prosody_data:
-        print(f"No prosody data to plot for {file_name}.")
-        return
+            if not os.path.exists(image_path):
+                logger.error("Failed to save face image for analysis.")
+                return []
 
-    emotions_over_time = []
-    emotion_labels = []
+            # Initialize Hume client
+            client = AsyncHumeClient(api_key=self.hume_api_key)
+            model_config = Config(face={})
+            stream_options = StreamConnectOptions(config=model_config)
 
-    for entry in prosody_data:
-        for prediction in entry.get("predictions", []):
-            emotions_over_time.append(prediction)
-            if not emotion_labels:
-                emotion_labels = prediction.keys()
+            async with client.expression_measurement.stream.connect(options=stream_options) as socket:
+                result = await socket.send_file(image_path)
 
-    if not emotions_over_time or not emotion_labels:
-        print(f"No emotions data available for plotting for {file_name}.")
-        return
-
-    time_points = range(len(emotions_over_time))
-
-    plt.figure(figsize=(14, 8))
-    for emotion in emotion_labels:
-        values = [emo_data.get(emotion, 0) for emo_data in emotions_over_time]
-        plt.plot(time_points, values, label=emotion)
-
-    plt.xlabel("Time (5-second intervals)")
-    plt.ylabel("Emotion Intensity")
-    plt.title(f"Emotion Analysis Over Time for {file_name}")
-    plt.legend()
-    plt.show()
-
-# Main function to process all WAV files in a folder
-async def process_audio_folder(folder_path):
-    wav_files = [f for f in os.listdir(folder_path) if f.endswith('.wav')]
-    if not wav_files:
-        print("No WAV files found in the specified folder.")
-        return
-
-    for wav_file in wav_files:
-        file_path = os.path.join(folder_path, wav_file)
-        print(f"Processing file: {file_path}")
-        analysis_result = await analyze_audio(file_path)
-        if analysis_result:
-            prosody_data = analysis_result.get("prosody", [])
-            plot_emotions_over_time(prosody_data, wav_file)
-        else:
-            print(f"Failed to analyze audio for {wav_file}.")
-
-if __name__ == "__main__":
-    # Change this path to the appropriate folder containing your WAV files
-    wav_folder_path = "/Users/Parzon/Downloads/Artificial_Consciousness/InteractiveAvatarNextJSDemo-main/HeyGenPersonalised/uploaded_audio"
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(process_audio_folder(wav_folder_path))
+                # Parse result
+                if result and hasattr(result, "face") and result.face.predictions:
+                    emotions = result.face.predictions[0].emotions
+                    # Sort and take top 5 emotions
+                    top_emotions = sorted(emotions, key=lambda e: e.score, reverse=True)[:5]
+                    emotion_list = [
+                        {"emotion": e.name, "score": e.score} for e in top_emotions
+                    ]
+                    logger.info(f"Top 3 emotions: {emotion_list[:3]}")
+                    return emotion_list
+                else:
+                    logger.warning("No face emotion detected")
+                    return []
+        except Exception as e:
+            logger.error(f"Emotion analysis error: {e}")
+            return []
+        finally:
+            if os.path.exists(image_path):
+                os.remove(image_path)  # Cleanup temp file
