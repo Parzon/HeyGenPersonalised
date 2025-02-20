@@ -1,4 +1,5 @@
 import os
+import uuid
 import hashlib
 import asyncio
 import datetime
@@ -15,6 +16,8 @@ from hume.expression_measurement.stream import Config as HumeConfig
 from hume.expression_measurement.stream.socket_client import StreamConnectOptions
 import openai
 from openai import OpenAI
+from aiohttp import web
+import aiohttp_cors
 
 # Configuration Constants
 UPLOAD_DIR = "uploaded_audio"
@@ -91,6 +94,43 @@ async def get_last_session_id(db_connection):
         session_id = result[0] if result else None
         logger.info(f"Retrieved session ID: {session_id}")
         return session_id
+
+# -------------------- Image Handling --------------------
+
+# Modify handle_image_upload to add error handling
+async def handle_image_upload(request):
+    logger.info("📸 Received image upload request...")
+    try:
+        reader = await request.multipart()
+        field = await reader.next()
+        if not field or field.name != 'file':
+            return web.Response(text="Invalid form field", status=400)
+
+        filename = field.filename
+        if not filename:
+            filename = f"image_{datetime.datetime.now().timestamp()}.jpg"
+        else:
+            # Force a unique ID
+            filename = f"{uuid.uuid4()}_{filename}"
+
+        save_path = os.path.join("uploaded_images", filename)
+
+        save_path = os.path.join("uploaded_images", filename)
+        os.makedirs("uploaded_images", exist_ok=True)
+
+        async with aiofiles.open(save_path, "wb") as f:
+            while True:
+                chunk = await field.read_chunk()
+                if not chunk:
+                    break
+                await f.write(chunk)
+
+        logger.info(f"✅ Image successfully saved: {save_path}")
+        return web.Response(text=f"✅ Image {filename} uploaded successfully")
+    
+    except Exception as e:
+        logger.error(f"Image upload error: {str(e)}")
+        return web.Response(text=f"❌ Upload failed: {str(e)}", status=500)
 
 
 # -------------------- Audio Handling --------------------
@@ -436,12 +476,29 @@ async def retrieve_face_emotions(db_connection):
 
 # -------------------- Application Startup --------------------
 
+# Modify init_app function
 async def init_app():
     await initialize_db()
     app = web.Application()
-    app.router.add_post("/upload_audio", handle_audio_upload)
-    return app
+    
+    # Configure CORS
+    cors = aiohttp_cors.setup(app, defaults={
+        "*": aiohttp_cors.ResourceOptions(
+            allow_credentials=True,
+            expose_headers="*",
+            allow_headers="*",
+            allow_methods="*",
+        )
+    })
 
+    app.router.add_post("/upload_audio", handle_audio_upload)
+    app.router.add_post("/upload_image", handle_image_upload)
+
+    # Enable CORS for all routes
+    for route in list(app.router.routes()):
+        cors.add(route)
+
+    return app
 
 if __name__ == "__main__":
     web.run_app(init_app(), port=8000)
