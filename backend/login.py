@@ -39,7 +39,7 @@ print(f"✅ Python Version: {sys.version}")
 
 # Load admin usernames from file
 def load_admin_usernames():
-    admin_file_path = os.path.join(os.getcwd(), 'admin.txt')
+    admin_file_path = os.path.join(os.getcwd(), '/Users/Parzon/Downloads/Artificial_Consciousness/InteractiveAvatarNextJSDemo-main/HeyGenPersonalised/backend/admin.txt')
     if os.path.exists(admin_file_path):
         with open(admin_file_path, 'r') as file:
             return [line.strip() for line in file if line.strip()]
