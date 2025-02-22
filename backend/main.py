@@ -14,12 +14,6 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(PROCESSED_DIR, exist_ok=True)
 os.makedirs(IMAGE_DIR, exist_ok=True)
 
-# Global counters
-silence_counter = 0
-processed_hashes = set()
-audio_file_counter = 0
-image_file_counter = 0
-images_batch_list = []  # Collect filenames here until we have 40 images.
 
 # -------------------- Server Setup --------------------
 

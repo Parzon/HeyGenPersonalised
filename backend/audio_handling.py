@@ -11,6 +11,7 @@ from pydub.silence import detect_silence as pydub_detect_silence
 
 from env_keys import get_openai_api_key, get_hume_api_key
 from session_helpers import get_last_session_id, retrieve_face_emotions
+
 from openai_configs import (
     generate_openai_response,
     handle_conversation_starter, 
@@ -26,10 +27,17 @@ from config import (
     MIN_SILENCE_LEN,
     CHUNK_SIZE_MS,
     IMAGES_PER_BATCH,
-    AUDIO_FILE_EXT
+    AUDIO_FILE_EXT,
+    UPLOAD_DIR,
+    PROCESSED_DIR, 
+    DB_FILE
 )
 
 from logger import logger
+
+audio_file_counter = 0
+processed_hashes = set()
+silence_counter = 0
 
 async def handle_audio_upload(request):
     """
@@ -76,7 +84,6 @@ async def process_uploaded_audio(file_path, base_filename):
        - Otherwise, reset silence_counter = 0.
     3) Remove the original .webm and the intermediate WAV at the end.
     """
-    global silence_counter
     try:
         async with aiosqlite.connect(DB_FILE) as db_conn:
             session_id = await get_last_session_id(db_conn)

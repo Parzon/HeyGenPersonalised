@@ -8,14 +8,18 @@ import uuid
 import cv2
 from aiohttp import web
 
+from hume_face_analysis import analyze_face_image
 from logger import logger
 from config import IMAGES_PER_BATCH, IMAGE_DIR
+from session_helpers import get_last_session_id
+
+image_file_counter = 0
+images_batch_list = []  # Collect filenames here until we have 40 images.
 
 async def handle_image_upload(request):
     """
     Once we get 40 images, run face detection, pick best face, analyze with Hume, store in DB, delete others.
     """
-    global image_file_counter, images_batch_list
 
     logger.info("📸 Received image upload request...")
     try:
@@ -58,7 +62,7 @@ async def process_face_images_batch():
     - Delete all other images.
     - Store face emotion in DB, clear images_batch_list.
     """
-    global images_batch_list
+
     if not images_batch_list:
         logger.info("No images to process.")
         return
