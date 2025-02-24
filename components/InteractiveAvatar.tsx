@@ -174,13 +174,40 @@ const InteractiveAvatar = () => {
       headers: { "Content-Type": "multipart/form-data" },
     });
     console.log("Image uploaded successfully:", response.data);
-  };
+  };  // 1) Add a new piece of state to hold the latest AI response:
+  const [latestAIResponse, setLatestAIResponse] = useState<string>("");
 
+  interface AIResponse {
+    ai_response: string | null;
+  }
+  // 2) Poll the backend every few seconds to get the latest AI response:
+  useEffect(() => {
+    const intervalId = setInterval(async () => {
+      try {
+        const res = await axios.get<AIResponse>("http://localhost:8000/latest_ai_response");
+        if (res.data.ai_response) {
+          setLatestAIResponse(res.data.ai_response);
+        }
+      } catch (err) {
+        console.error("Error fetching latest AI response:", err);
+      }
+    }, 3000); // poll every 3 seconds
+
+    return () => clearInterval(intervalId);
+  }, []);
+
+
+  // 3) Render the AI response somewhere in your return:
   return (
     <div>
+      {/* ... your existing UI ... */}
       <p>Recording in progress (audio)... Images will start after 5 minutes, capture 40, then stop.</p>
 
-      {/* Hidden video & canvas for capturing images */}
+      {/* Display the AI response here */}
+      <h3>AI Response:</h3>
+      <div style={{ whiteSpace: 'pre-wrap' }}>{latestAIResponse}</div>
+
+      {/* hidden elements remain unchanged */}
       <video ref={videoRef} autoPlay playsInline style={{ display: "none" }} />
       <canvas ref={canvasRef} style={{ display: "none" }} />
     </div>
@@ -188,3 +215,4 @@ const InteractiveAvatar = () => {
 };
 
 export default InteractiveAvatar;
+

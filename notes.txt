@@ -1,5 +1,17 @@
 notes.txt 
 
 Dominant feeling in larger timestamps. Average them out. 
+
 Collect data anyway. 
 
+
+
+Collect images in front end even if fails
+
+save conversation data takes 1 more argument 
+
+send umage to hume for face detect
+
+strean responses, gemini flash
+
+openai background detection

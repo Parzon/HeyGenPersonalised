@@ -208,7 +208,7 @@ async def process_uploaded_audio(file_path, base_filename):
                             ai_resp = await generate_openai_response(prompt)
                             if ai_resp:
                                 await save_conversation_data(db_conn, session_id,
-                                                             transcription, ai_resp)
+                                                             transcription, ai_resp) # bug fix
 
                     elif silence_counter == 6:
                         logger.info("User silent for 6 chunks. Starting conversation.")
@@ -224,7 +224,7 @@ async def process_uploaded_audio(file_path, base_filename):
                         if hey_resp:
                             await save_conversation_data(db_conn, session_id, 
                                                          "Are you there?", 
-                                                         hey_resp)
+                                                         hey_resp) # bug fix
                             logger.info(f"Sent 'Hey are you there?' => {hey_resp}")
 
                     elif silence_counter == 20:
@@ -270,7 +270,7 @@ async def transcribe_dynamic_chunks(chunk_files, chunk_range, session_id, db_con
     # Remove the temp file after transcription
     if os.path.exists(temp_transcription_path):
         os.remove(temp_transcription_path)
-        
+
     if transcription:
         face_emotions = await retrieve_face_emotions(db_conn)
         prompt = (
@@ -283,7 +283,7 @@ async def transcribe_dynamic_chunks(chunk_files, chunk_range, session_id, db_con
         if ai_resp:
             await save_conversation_data(
                 db_conn, session_id, transcription, ai_resp, chunk_range
-            )
+            ) # check initial moood
 
     logger.info(f"Transcribed speech chunks {chunk_range} successfully.")
 

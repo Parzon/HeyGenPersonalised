@@ -17,6 +17,7 @@ from hume.expression_measurement.stream.types import StreamFace
 from config import SECRET_KEY
 from env_keys import get_hume_api_key
 
+
 # Apply nest_asyncio for Flask async compatibility
 nest_asyncio.apply()
 
@@ -29,13 +30,6 @@ app.config['SECRET_KEY'] = SECRET_KEY
 # Debugging logs
 print("🚀 Application is starting...")
 
-# Ensure pandas and numpy versions are compatible
-import numpy as np
-print(f"✅ Pandas Version: {pd.__version__}, Numpy Version: {np.__version__}")
-
-# Ensure correct Python version
-import sys
-print(f"✅ Python Version: {sys.version}")
 
 # Load admin usernames from file
 def load_admin_usernames():
@@ -78,7 +72,6 @@ except Exception as e:
     raise
 
 
-
 @app.route('/')
 def index():
     return render_template('login.html')
@@ -94,7 +87,7 @@ def login():
         if username in admin_usernames:
             session['username'] = username
             login_timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            session_id = str(int(time.time()))
+            session_id = str(int(time.time())) # Make it more complex
             session['session_id'] = session_id
             session['login_timestamp'] = login_timestamp
 

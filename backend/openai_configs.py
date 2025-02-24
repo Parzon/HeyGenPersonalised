@@ -8,6 +8,7 @@ from openai import OpenAI
 from env_keys import get_openai_api_key, get_hume_api_key
 from config import DB_FILE
 from session_helpers import retrieve_face_emotions
+
 OPENAI_API_KEY = get_openai_api_key()
 HUME_API_KEY = get_hume_api_key()
 
