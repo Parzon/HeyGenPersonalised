@@ -1,4 +1,5 @@
 import aiosqlite
+import datetime
 from logger import logger
 
 async def get_last_session_id(db_conn):

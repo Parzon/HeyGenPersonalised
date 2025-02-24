@@ -38,10 +38,22 @@ from logger import logger
 audio_file_counter = 0
 processed_hashes = set()
 silence_counter = 0
+leftover_segment = AudioSegment.empty()
+current_speech_chunks = []
+current_speech_range = []
+
+
+# Path to a single combined WAV file that accumulates all valid (non-duplicate) audio
+COMBINED_WAV_PATH = os.path.join(PROCESSED_DIR, "combined_audio.wav")
+
+# How many milliseconds of the combined WAV we've already split into chunks
+combined_offset_ms = 0
 
 async def handle_audio_upload(request):
     """
-    Receives .webm audio, saves it with session/timestamp in name, then processes in background.
+    1) Receives .webm audio.
+    2) Saves it to UPLOAD_DIR.
+    3) Processes in background (append to single combined WAV + do 5s chunking).
     """
     global audio_file_counter
     reader = await request.multipart()
@@ -49,14 +61,12 @@ async def handle_audio_upload(request):
     if not field:
         return web.Response(text="No audio file found", status=400)
 
-    # We can embed session ID here if we want. We'll get it from DB (if any).
-    # But we do that after we have the file. So let's just do a basic name now:
     audio_file_counter += 1
     base_filename = f"audio_{audio_file_counter}"
     filename = base_filename + AUDIO_FILE_EXT
     save_path = os.path.join(UPLOAD_DIR, filename)
 
-    # Save
+    # Save the incoming file
     async with aiofiles.open(save_path, 'wb') as f:
         while True:
             chunk = await field.read_chunk()
@@ -65,25 +75,23 @@ async def handle_audio_upload(request):
             await f.write(chunk)
 
     logger.info(f"Audio file uploaded: {save_path}")
+    # Process in background
     asyncio.create_task(process_uploaded_audio(save_path, base_filename))
     return web.Response(text="Audio uploaded successfully")
 
 
-
 async def process_uploaded_audio(file_path, base_filename):
     """
-    1) Convert to valid WAV, split into 5s chunks (with leftover padded).
-    2) For each chunk:
-       - If it's unreadable or < MIN_AUDIO_DURATION_MS, remove it.
-       - If silent, rename chunk file with _silence, and handle the 
-         1,2,4,6 silence_counter logic:
-           - 1 => Transcribe + face emotions => "friendly" response
-           - 2 => handle_conversation_starter(session_id)
-           - 4 => "Hey, are you there?"
-           - 6 => shut down the app
-       - Otherwise, reset silence_counter = 0.
-    3) Remove the original .webm and the intermediate WAV at the end.
+    1) Check duplicate (server side). If duplicate => remove, return.
+    2) Convert upload to WAV (16kHz mono).
+    3) Append newly converted WAV to leftover_segment (in memory).
+    4) While leftover_segment >= 5 seconds, export a 5-second chunk + process it.
+    5) Remove original upload + temp WAV at the end.
     """
+    import datetime
+
+    global silence_counter, leftover_segment
+
     try:
         async with aiosqlite.connect(DB_FILE) as db_conn:
             session_id = await get_last_session_id(db_conn)
@@ -97,57 +105,99 @@ async def process_uploaded_audio(file_path, base_filename):
                 os.remove(file_path)
                 return
 
-            # 2) Convert to WAV (16kHz mono)
+            # 2) Convert to WAV
             wav_path = await convert_to_wav(file_path, base_filename)
             if not wav_path or not os.path.exists(wav_path):
-                logger.error("WAV conversion failed. Removing original file.")
+                logger.error("WAV conversion failed. Removing original.")
                 os.remove(file_path)
                 return
 
-            # 3) Split into 5s chunks (padding leftover to 5s)
-            chunk_files = await split_audio_into_chunks(wav_path, base_filename, session_id)
-            if not chunk_files:
-                logger.info("No chunks. Removing original & wav.")
+            # Load new WAV into memory
+            try:
+                new_seg = AudioSegment.from_file(wav_path)
+            except Exception as e:
+                logger.error(f"Could not read newly converted WAV: {e}")
                 os.remove(file_path)
                 os.remove(wav_path)
                 return
 
-            short_or_bad = []
+            # 3) Append to leftover_segment (in-memory)
+            leftover_segment += new_seg
 
-            # 4) Process each chunk for silence or validity
-            for cf in chunk_files:
-                # Attempt to read
+            # 4) While leftover >= 5s, export chunk and process
+            while len(leftover_segment) >= CHUNK_SIZE_MS:  # 5000ms
+                # Slice out the first 5s
+                five_sec = leftover_segment[:CHUNK_SIZE_MS]
+                # Remove that 5s from the front of leftover_segment
+                leftover_segment = leftover_segment[CHUNK_SIZE_MS:]
+
+                # Export this chunk as a temporary WAV file
+                ts = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+                chunk_name = f"{base_filename}_session_{session_id}_chunk_{ts}.wav"
+                chunk_path = os.path.join(PROCESSED_DIR, chunk_name)
+                five_sec.export(chunk_path, format='wav')
+
+                logger.info(f"Created 5-second chunk: {chunk_path} (duration={len(five_sec)}ms)")
+
+                # -- Process the chunk (silence detection, counters, etc.) --
                 try:
-                    seg = AudioSegment.from_file(cf)
+                    seg = AudioSegment.from_file(chunk_path)
                 except Exception as e:
-                    logger.warning(f"Unreadable chunk {cf}: {e}")
-                    short_or_bad.append(cf)
+                    logger.warning(f"Unreadable chunk {chunk_path}: {e}")
+                    if os.path.exists(chunk_path):
+                        os.remove(chunk_path)
                     continue
 
                 dur = len(seg)
                 if dur < MIN_AUDIO_DURATION_MS:
-                    logger.info(f"Removing sub-min chunk {cf} (duration={dur}ms)")
-                    short_or_bad.append(cf)
+                    logger.info(f"Removing sub-min chunk {chunk_path} (duration={dur}ms)")
+                    if os.path.exists(chunk_path):
+                        os.remove(chunk_path)
                     continue
 
                 # Check silence
-                is_silent = await detect_silence(cf)
+                is_silent = await detect_silence(chunk_path)
                 if is_silent:
                     silence_counter += 1
-                    # Rename chunk with "_silence"
-                    base_noext, ext = os.path.splitext(cf)
+                    logger.info(f"Silent chunk detected. Counter: {silence_counter}")
+
+                    base_noext, ext = os.path.splitext(chunk_path)
                     renamed_path = f"{base_noext}_silence{ext}"
                     try:
-                        os.rename(cf, renamed_path)
-                        cf = renamed_path
+                        os.rename(chunk_path, renamed_path)
                         logger.info(f"Renamed silent chunk => {renamed_path}")
+                        if os.path.exists(chunk_path):
+                            os.remove(chunk_path)
                     except Exception as e:
                         logger.error(f"Could not rename silent chunk: {e}")
 
-                    # ========== Silence logic (1,2,4,6) ==========
+                    # If user was continuously speaking, now is the time to transcribe
+                    if current_speech_chunks:
+                        await transcribe_dynamic_chunks(current_speech_chunks, current_speech_range, session_id, db_conn)
+                        current_speech_chunks.clear()
+                        current_speech_range.clear()
+
+                else:
+                    # Reset silence counter since speech was detected
+                    silence_counter = 0
+                    current_speech_chunks.append(chunk_path)
+                    current_speech_range.append(len(current_speech_chunks))
+
+
+                    # ========== Silence Logic (1,2,4,6) ==========
                     if silence_counter == 1:
-                        # 1 chunk of silence => transcribe => friendly response
-                        transcription = await transcribe_audio(cf)
+                        logger.info("User silent for 1 chunk. Transcribing...")
+                        # Save the concatenated audio to a temporary file
+                        temp_transcription_path = os.path.join(PROCESSED_DIR, f"temp_transcription_{session_id}.wav")
+                        combined_audio.export(temp_transcription_path, format='wav')
+
+                        # Transcribe using the saved file path
+                        transcription = await transcribe_audio(temp_transcription_path)
+
+                        # Remove temp file after transcription
+                        if os.path.exists(temp_transcription_path):
+                            os.remove(temp_transcription_path)
+
                         if transcription:
                             face_emotions = await retrieve_face_emotions(db_conn)
                             prompt = (
@@ -157,45 +207,108 @@ async def process_uploaded_audio(file_path, base_filename):
                             )
                             ai_resp = await generate_openai_response(prompt)
                             if ai_resp:
-                                await save_conversation_data(db_conn, session_id, transcription, ai_resp)
+                                await save_conversation_data(db_conn, session_id,
+                                                             transcription, ai_resp)
 
                     elif silence_counter == 6:
-                        # 2 silent chunks => conversation starter
+                        logger.info("User silent for 6 chunks. Starting conversation.")
                         await handle_conversation_starter(session_id)
 
                     elif silence_counter == 12:
-                        # 4 silent chunks => "Hey, are you there?"
-                        hey_prompt = "User has been silent for 4 chunks (~20 seconds). Politely ask if they're still there."
+                        logger.info("User silent for 12 chunks. Calling user.")
+                        hey_prompt = (
+                            "User has been silent for 4 chunks (~20 seconds). "
+                            "Politely ask if they're still there."
+                        )
                         hey_resp = await generate_openai_response(hey_prompt)
                         if hey_resp:
-                            await save_conversation_data(db_conn, session_id, "Are you there?", hey_resp)
+                            await save_conversation_data(db_conn, session_id, 
+                                                         "Are you there?", 
+                                                         hey_resp)
                             logger.info(f"Sent 'Hey are you there?' => {hey_resp}")
 
                     elif silence_counter == 20:
-                        # 6 silent chunks => shut down
                         logger.info("User silent for 6 chunks (~30 seconds). Shutting down the app.")
                         os._exit(0)
 
-                else:
-                    # Not silent => reset
-                    silence_counter = 0
-
-            # 5) Remove short/unusable chunks
-            for badf in short_or_bad:
-                if os.path.exists(badf):
-                    os.remove(badf)
-                    logger.info(f"Removed short/unusable chunk: {badf}")
-
-            # 6) Clean up original .webm & .wav
+            # 5) Cleanup original files
             if os.path.exists(file_path):
                 os.remove(file_path)
-                logger.info(f"Removed original file: {file_path}")
             if os.path.exists(wav_path):
                 os.remove(wav_path)
-                logger.info(f"Removed intermediate WAV: {wav_path}")
 
     except Exception as e:
         logger.error(f"Error in process_uploaded_audio: {e}")
+
+# ------Dynamic Chunking------------
+
+async def transcribe_dynamic_chunks(chunk_files, chunk_range, session_id, db_conn):
+    """
+    Dynamically concatenates all consecutive non-silent chunks before a silence,
+    sends it for transcription, and records the chunk range in the database.
+    """
+    if not chunk_files:
+        return
+    
+    # Concatenate all valid speech chunks
+    combined_audio = AudioSegment.empty()
+    for cf in chunk_files:
+        try:
+            seg = AudioSegment.from_file(cf)
+            combined_audio += seg
+        except Exception as e:
+            logger.warning(f"Error reading chunk {cf}: {e}")
+
+    # Transcribe the combined audio file (without saving it)
+    # Save concatenated audio to a temporary file before transcription
+    temp_transcription_path = os.path.join(PROCESSED_DIR, f"temp_transcription_{session_id}.wav")
+    combined_audio.export(temp_transcription_path, format='wav')
+
+    # Transcribe using the saved file path
+    transcription = await transcribe_audio(temp_transcription_path)
+
+    # Remove the temp file after transcription
+    if os.path.exists(temp_transcription_path):
+        os.remove(temp_transcription_path)
+        
+    if transcription:
+        face_emotions = await retrieve_face_emotions(db_conn)
+        prompt = (
+            f"User spoke continuously for {len(chunk_files) * 5} seconds. "
+            f"Face emotions: {face_emotions}.\n"
+            f"Full transcript: {transcription}\n"
+            "Provide a meaningful response with full context."
+        )
+        ai_resp = await generate_openai_response(prompt)
+        if ai_resp:
+            await save_conversation_data(
+                db_conn, session_id, transcription, ai_resp, chunk_range
+            )
+
+    logger.info(f"Transcribed speech chunks {chunk_range} successfully.")
+
+
+
+async def append_wav_to_combined(new_wav_path):
+    """
+    Appends 'new_wav_path' to our single 'combined_audio.wav' (COMBINED_WAV_PATH).
+    If 'combined_audio.wav' doesn't exist yet, just rename 'new_wav_path' to it.
+    Otherwise, load both, concatenate, and export.
+    """
+    if not os.path.exists(COMBINED_WAV_PATH):
+        # Just rename the new file to be our combined file
+        os.rename(new_wav_path, COMBINED_WAV_PATH)
+        logger.info(f"Created initial combined WAV => {COMBINED_WAV_PATH}")
+    else:
+        def _append():
+            combined_seg = AudioSegment.from_file(COMBINED_WAV_PATH)
+            new_seg = AudioSegment.from_file(new_wav_path)
+            final_seg = combined_seg + new_seg
+            final_seg.export(COMBINED_WAV_PATH, format="wav")
+
+        # Append in a background thread
+        await asyncio.to_thread(_append)
+        logger.info(f"Appended {new_wav_path} to {COMBINED_WAV_PATH}")
 
 # -------------------- Short Chunk Combination --------------------
 
@@ -246,7 +359,6 @@ async def is_duplicate_audio(file_path):
     async with aiofiles.open(file_path, 'rb') as f:
         data = await f.read()
         audio_hash = hashlib.md5(data).hexdigest()
-
     if audio_hash in processed_hashes:
         logger.info(f"Duplicate audio detected: {file_path}")
         return True
@@ -258,12 +370,13 @@ async def is_duplicate_audio(file_path):
 async def detect_silence(file_path):
     """
     Return True if chunk is considered silent by pydub.
-    We do a try/except in case ffmpeg fails.
     """
     def _check():
         audio = AudioSegment.from_file(file_path, format="wav")
         silences = pydub_detect_silence(
-            audio, min_silence_len=MIN_SILENCE_LEN, silence_thresh=SILENCE_THRESHOLD
+            audio,
+            min_silence_len=MIN_SILENCE_LEN,
+            silence_thresh=SILENCE_THRESHOLD
         )
         return len(silences) > 0
 
@@ -272,7 +385,6 @@ async def detect_silence(file_path):
     except Exception as e:
         logger.warning(f"Silence detection failed on {file_path}: {e}")
         return False
-
 # -------------------- Audio Combination --------------------
 
 async def combine_audio_chunks(chunk_files, base_filename):
@@ -293,11 +405,11 @@ async def combine_audio_chunks(chunk_files, base_filename):
 
 async def convert_to_wav(file_path, base_filename):
     """
-    Convert the input audio file (e.g., .webm) to a valid 16kHz mono WAV format for OpenAI Whisper.
+    Convert the input audio file (e.g., .webm) to 16kHz mono WAV for Whisper.
     """
     def _conv():
         seg = AudioSegment.from_file(file_path)
-        seg = seg.set_frame_rate(16000).set_channels(1)  # Convert to 16kHz mono
+        seg = seg.set_frame_rate(16000).set_channels(1)  # 16kHz mono
         wav_name = f"{base_filename}.wav"
         wav_path = os.path.join(PROCESSED_DIR, wav_name)
         seg.export(wav_path, format='wav')
@@ -312,7 +424,82 @@ async def convert_to_wav(file_path, base_filename):
         return None
 
 # -------------------- Audio Splitting --------------------
-async def split_audio_into_chunks(file_path, base_filename, session_id):
+async def split_audio_into_chunks(
+    file_path, base_filename, session_id, start_offset_ms=0
+    ):
+    """
+    Splits the combined WAV from 'start_offset_ms' up to the end
+    into exact 5s chunks. No padding is added. The leftover chunk
+    (if any) is its real duration (could be < 5s).
+    
+    Returns the list of newly created chunk file paths.
+    """
+    chunk_files = []
+    
+    if not file_path or not os.path.exists(file_path):
+        logger.error("No valid WAV file to split.")
+        return chunk_files
+
+    try:
+        audio = AudioSegment.from_file(file_path)
+    except Exception as e:
+        logger.error(f"Cannot read WAV for splitting: {e}")
+        return chunk_files
+
+    total_ms = len(audio)
+    if total_ms <= start_offset_ms:
+        # No new audio to chunk
+        return chunk_files
+
+    # We'll slice only the new portion
+    new_audio = audio[start_offset_ms:]
+
+    new_len = len(new_audio)
+    if new_len == 0:
+        logger.warning("New portion of audio is 0 ms, skipping splitting.")
+        return chunk_files
+
+    # Full 5s chunks in the new portion
+    num_full_chunks = new_len // CHUNK_SIZE_MS
+    remainder = new_len % CHUNK_SIZE_MS
+
+    # Create each 5-second chunk
+    for i in range(num_full_chunks):
+        start_ms = i * CHUNK_SIZE_MS
+        seg = new_audio[start_ms:start_ms + CHUNK_SIZE_MS]
+        ts = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+        chunk_name = f"{base_filename}_session_{session_id}_chunk_{i}_{ts}.wav"
+        chunk_path = os.path.join(PROCESSED_DIR, chunk_name)
+        seg.export(chunk_path, format='wav')
+        logger.info(
+            f"Created chunk: {chunk_path} (duration={len(seg)}ms) "
+            f"overall range=[{start_offset_ms + start_ms}, {start_offset_ms + start_ms + CHUNK_SIZE_MS}]"
+        )
+        chunk_files.append(chunk_path)
+
+    # Leftover chunk (< 5s, no padding)
+    if remainder > 0:
+        leftover_start = num_full_chunks * CHUNK_SIZE_MS
+        leftover_seg = new_audio[leftover_start:]
+        leftover_dur = len(leftover_seg)
+        if leftover_dur > 0:
+            ts = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+            chunk_name = f"{base_filename}_session_{session_id}_chunk_{num_full_chunks}_{ts}.wav"
+            chunk_path = os.path.join(PROCESSED_DIR, chunk_name)
+            leftover_seg.export(chunk_path, format='wav')
+            logger.info(
+                f"Created leftover chunk: {chunk_path} "
+                f"(duration={leftover_dur}ms, no padding). "
+                f"overall range=[{start_offset_ms + leftover_start}, {start_offset_ms + leftover_start + leftover_dur}]"
+            )
+            chunk_files.append(chunk_path)
+
+    return chunk_files
+    """
+    Splits the given WAV file into exact 5-second chunks (CHUNK_SIZE_MS).
+    NO leftover padding is applied; if there's leftover < CHUNK_SIZE_MS,
+    we simply export that leftover "as is" without adding silence.
+    """
     chunk_files = []
     
     if not file_path or not os.path.exists(file_path):
@@ -330,9 +517,11 @@ async def split_audio_into_chunks(file_path, base_filename, session_id):
         logger.warning(f"Audio file {file_path} is empty, skipping splitting.")
         return chunk_files
 
+    # How many full 5-second chunks we have
     num_full_chunks = total_ms // CHUNK_SIZE_MS
     remainder = total_ms % CHUNK_SIZE_MS
 
+    # Export each 5-second chunk
     for i in range(num_full_chunks):
         start_ms = i * CHUNK_SIZE_MS
         seg = audio[start_ms:start_ms + CHUNK_SIZE_MS]
@@ -343,15 +532,17 @@ async def split_audio_into_chunks(file_path, base_filename, session_id):
         logger.info(f"Created chunk: {chunk_path} (duration={len(seg)}ms)")
         chunk_files.append(chunk_path)
 
+    # Export leftover as-is (no padding)
     if remainder > 0:
         leftover_seg = audio[num_full_chunks * CHUNK_SIZE_MS:]
-        pad_duration = CHUNK_SIZE_MS - len(leftover_seg)
-        padded_seg = leftover_seg + AudioSegment.silent(duration=pad_duration)
         ts = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
         chunk_name = f"{base_filename}_session_{session_id}_chunk_{num_full_chunks}_{ts}.wav"
         chunk_path = os.path.join(PROCESSED_DIR, chunk_name)
-        padded_seg.export(chunk_path, format='wav')
-        logger.info(f"Created final padded chunk: {chunk_path} (original duration={len(leftover_seg)}ms, padded to 5000ms)")
+        leftover_seg.export(chunk_path, format='wav')
+        logger.info(
+            f"Created leftover chunk: {chunk_path} "
+            f"(duration={len(leftover_seg)}ms, no padding applied)"
+        )
         chunk_files.append(chunk_path)
 
     return chunk_files

@@ -1,10 +1,13 @@
 import os
 import aiofiles
+import aiosqlite
 import aiohttp
+import datetime
 from logger import logger
 from openai import OpenAI
 from env_keys import get_openai_api_key, get_hume_api_key
-
+from config import DB_FILE
+from session_helpers import retrieve_face_emotions
 OPENAI_API_KEY = get_openai_api_key()
 HUME_API_KEY = get_hume_api_key()
 
@@ -70,12 +73,13 @@ async def handle_conversation_starter(session_id):
         logger.info(f"Conversation starter generated: {ai_reply}")
 
 
-async def save_conversation_data(db_conn, session_id, transcription, ai_response):
+async def save_conversation_data(db_conn, session_id, transcription, ai_response, chunk_range):
+
     ts = datetime.datetime.now().isoformat()
     await db_conn.execute('''
-        INSERT INTO conversation (timestamp, session_id, transcription, ai_response)
-        VALUES (?, ?, ?, ?)
-    ''', (ts, session_id, transcription, ai_response))
+        INSERT INTO conversation (timestamp, session_id, transcription, ai_response, chunk_range)
+        VALUES (?, ?, ?, ?, ?)
+    ''', (ts, session_id, transcription, ai_response, str(chunk_range)))
     await db_conn.commit()
     logger.info("Conversation data saved to DB.")
 

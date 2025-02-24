@@ -1,5 +1,6 @@
 import aiosqlite
 from logger import logger
+import datetime
 
 from config import DB_FILE
 
@@ -15,7 +16,8 @@ async def initialize_db():
                 timestamp TEXT,
                 session_id TEXT,
                 transcription TEXT,
-                ai_response TEXT
+                ai_response TEXT, 
+                chunk_range TEXT
             )
         ''')
         # Face analysis table

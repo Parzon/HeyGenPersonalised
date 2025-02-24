@@ -14,7 +14,6 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(PROCESSED_DIR, exist_ok=True)
 os.makedirs(IMAGE_DIR, exist_ok=True)
 
-
 # -------------------- Server Setup --------------------
 
 async def init_app():

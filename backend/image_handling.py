@@ -10,7 +10,7 @@ from aiohttp import web
 
 from hume_face_analysis import analyze_face_image
 from logger import logger
-from config import IMAGES_PER_BATCH, IMAGE_DIR
+from config import IMAGES_PER_BATCH, IMAGE_DIR, DB_FILE
 from session_helpers import get_last_session_id
 
 image_file_counter = 0
