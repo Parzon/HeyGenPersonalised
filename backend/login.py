@@ -14,6 +14,12 @@ from hume import AsyncHumeClient
 from hume.expression_measurement.stream import Config
 from hume.expression_measurement.stream.socket_client import StreamConnectOptions
 from hume.expression_measurement.stream.types import StreamFace
+import sys
+import os
+
+BASE_DIR = os.getenv("APP_BASE_DIR", "/app")  # Default to /app in Docker
+sys.path.append(BASE_DIR)
+
 from config import SECRET_KEY
 from env_keys import get_hume_api_key
 
@@ -227,4 +233,4 @@ def save_face_analysis_to_db(username, initial_mood):
 
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(host='0.0.0.0', port=7000, debug=True)

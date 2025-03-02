@@ -1,1 +1,15 @@
-pip install hume==0.1.2
+aiofiles==24.1.0
+aiohttp==3.10.9
+aiohttp-cors == 0.7.0
+aiosqlite==0.20.0
+flask==3.0.3
+hume==0.7.4
+matplotlib==3.9.2
+openai==1.51.2
+pandas==2.2.3
+pydub==0.25.1
+opencv-python-headless==4.10.0.84
+nest_asyncio==1.6.0
+pathlib==1.0.1
+pillow==11.0.0
+gunicorn==23.0.0

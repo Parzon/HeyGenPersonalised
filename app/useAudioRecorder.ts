@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from "react";
 
 const useAudioRecorder = (socket: WebSocket | null) => {
   const [recording, setRecording] = useState(false);
@@ -7,13 +7,14 @@ const useAudioRecorder = (socket: WebSocket | null) => {
 
   useEffect(() => {
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      console.error('Audio recording is not supported in this browser.');
+      console.error("Audio recording is not supported in this browser.");
     }
   }, []);
 
   const startRecording = async () => {
     setRecording(true);
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
     mediaRecorderRef.current = new MediaRecorder(stream);
 
     mediaRecorderRef.current.ondataavailable = (event) => {

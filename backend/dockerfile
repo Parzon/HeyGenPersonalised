@@ -1,0 +1,26 @@
+# Use a lightweight Python image
+FROM python:3.9-slim
+
+# Set working directory
+WORKDIR /app
+
+# Upgrade pip first (fixes dependency issues)
+RUN pip install --upgrade pip
+
+# Copy requirements first
+COPY backend/requirements.txt requirements.txt
+
+# Install dependencies
+RUN pip install --no-cache-dir -r requirements.txt
+# Install system dependencies
+RUN apt-get update && apt-get install -y ffmpeg && rm -rf /var/lib/apt/lists/*
+
+
+# Copy the entire backend
+COPY backend/ .
+
+# Expose the Aiohttp port
+EXPOSE 8000
+
+# Run Gunicorn with Aiohttp worker
+CMD ["gunicorn", "-k", "aiohttp.worker.GunicornWebWorker", "-b", "0.0.0.0:8000", "--chdir", "/app", "main:init_app"]

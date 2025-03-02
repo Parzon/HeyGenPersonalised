@@ -15,3 +15,5 @@ send umage to hume for face detect
 strean responses, gemini flash
 
 openai background detection
+
+second time login, check if message is same backend db and ignore

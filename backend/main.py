@@ -61,5 +61,9 @@ async def init_app():
 
     return app
 
+async def create_app():
+    return await init_app()
+    
 if __name__ == "__main__":
-    web.run_app(init_app(), port=8000)
+    web.run_app(asyncio.run(init_app()), port=8000)
+

@@ -7,6 +7,7 @@ import {
   NavbarContent,
   NavbarItem,
 } from "@nextui-org/react";
+
 import { GithubIcon, HeyGenLogo } from "./Icons";
 import { ThemeSwitch } from "./ThemeSwitch";
 
@@ -56,8 +57,8 @@ export default function NavBar() {
           <Link
             isExternal
             aria-label="Github"
-            href="https://github.com/HeyGen-Official/StreamingAvatarSDK"
             className="flex flex-row justify-center gap-1 text-foreground"
+            href="https://github.com/HeyGen-Official/StreamingAvatarSDK"
           >
             <GithubIcon className="text-default-500" />
             SDK

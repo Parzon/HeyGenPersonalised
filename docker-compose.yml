@@ -1,0 +1,40 @@
+version: "3.8"
+
+services:
+  backend-flask:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    working_dir: /app
+    command: gunicorn -w 4 -b 0.0.0.0:7000 login:app  # ✅ Runs the Flask login page
+    ports:
+      - "7100:7100"
+    environment:
+      - FLASK_ENV=production
+    restart: always
+
+  backend-aiohttp:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    working_dir: /app
+    command: gunicorn -k aiohttp.worker.GunicornWebWorker -w 4 -b 0.0.0.0:8001 main:init_app  # ✅ Runs the Aiohttp service
+    ports:
+      - "8001:8001"
+    environment:
+      - APP_ENV=production
+    restart: always
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile  # ✅ Ensure this is correct for your frontend
+    working_dir: /app
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+    restart: always
+    depends_on:
+      - backend-flask
+      - backend-aiohttp

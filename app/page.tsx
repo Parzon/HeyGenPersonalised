@@ -1,4 +1,5 @@
 import React from "react";
+
 import InteractiveAvatar from "@/components/InteractiveAvatar";
 
 const Page = () => {

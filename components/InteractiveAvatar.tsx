@@ -1,17 +1,11 @@
 "use client";
 
-// ---------------------- EXISTING IMPORTS (UNCHANGED) ----------------------
-import React, { useEffect, useRef, useState } from 'react';
-import axios from 'axios';
-
-// ---------------------- NEW HEYGEN + NEXTUI IMPORTS ----------------------
-import type { StartAvatarResponse } from "@heygen/streaming-avatar";
-import StreamingAvatar, {
-  AvatarQuality,
-  StreamingEvents,
-  TaskType,
-  VoiceEmotion,
-} from "@heygen/streaming-avatar";
+// Type Imports
+// External Libraries
+import React, { useEffect, useRef, useState } from "react";
+import axios from "axios";
+import { useMemoizedFn, usePrevious } from "ahooks";
+// UI Components
 import {
   Button,
   Card,
@@ -26,9 +20,17 @@ import {
   Tabs,
   Tab,
 } from "@nextui-org/react";
-import { useMemoizedFn, usePrevious } from "ahooks";
+// HeyGen SDK
+import StreamingAvatar, {
+  AvatarQuality,
+  StreamingEvents,
+  TaskType,
+  VoiceEmotion,
+} from "@heygen/streaming-avatar";
 
+// Local Imports
 import InteractiveAvatarTextInput from "./InteractiveAvatarTextInput";
+
 import { AVATARS, STT_LANGUAGE_LIST } from "@/app/lib/constants";
 
 const InteractiveAvatar = () => {
@@ -43,7 +45,10 @@ const InteractiveAvatar = () => {
   useEffect(() => {
     const intervalId = setInterval(async () => {
       try {
-        const res = await axios.get<AIResponse>("http://localhost:8000/latest_ai_response");
+        const res = await axios.get<AIResponse>(
+          "http://localhost:8000/latest_ai_response",
+        );
+
         if (res.data.ai_response) {
           setLatestAIResponse(res.data.ai_response);
         }
@@ -61,9 +66,8 @@ const InteractiveAvatar = () => {
   const [heygenStream, setHeygenStream] = useState<MediaStream>();
   const [debug, setDebug] = useState<string>();
   const [avatarId, setAvatarId] = useState<string>("");
-  const [language, setLanguage] = useState<string>('en');
-  const [data, setData] = useState<StartAvatarResponse | null>(null);
-
+  const [language, setLanguage] = useState<string>("en");
+  //const [data, setData] = useState<StartAvatarResponse | null>(null);
 
   const mediaStreamRef = useRef<HTMLVideoElement>(null);
   const heygenAvatar = useRef<StreamingAvatar | null>(null);
@@ -78,7 +82,7 @@ const InteractiveAvatar = () => {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const [audioCounter, setAudioCounter] = useState(1);
   const [timestamp] = useState(
-    new Date().toISOString().replace(/[-:T]/g, "").split(".")[0]
+    new Date().toISOString().replace(/[-:T]/g, "").split(".")[0],
   );
   const chunksRef = useRef<Blob[]>([]);
   const isRecordingRef = useRef<boolean>(false);
@@ -96,6 +100,7 @@ const InteractiveAvatar = () => {
       const mediaRecorder = new MediaRecorder(stream, {
         mimeType: "audio/webm",
       });
+
       mediaRecorderRef.current = mediaRecorder;
 
       mediaRecorder.ondataavailable = function (e) {
@@ -107,6 +112,7 @@ const InteractiveAvatar = () => {
       mediaRecorder.onstop = function () {
         // Combine chunks into a Blob
         const blob = new Blob(chunksRef.current, { type: "audio/webm" });
+
         chunksRef.current = []; // Reset chunks
 
         // Generate filename with timestamp and audio counter
@@ -138,6 +144,7 @@ const InteractiveAvatar = () => {
   const initVideoProcess = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
       }
@@ -176,14 +183,20 @@ const InteractiveAvatar = () => {
 
   const sendAudioChunk = async (audioBlob: Blob, filename: string) => {
     const formData = new FormData();
+
     formData.append("file", audioBlob, filename);
 
     try {
-      const response = await axios.post("http://localhost:8000/upload_audio", formData, {
-        headers: {
-          "Content-Type": "multipart/form-data",
+      const response = await axios.post(
+        "http://localhost:8000/upload_audio",
+        formData,
+        {
+          headers: {
+            "Content-Type": "multipart/form-data",
+          },
         },
-      });
+      );
+
       console.log("Audio uploaded successfully", response.data);
     } catch (error) {
       console.error("Error uploading audio", error);
@@ -201,6 +214,7 @@ const InteractiveAvatar = () => {
       if (imagesCaptured >= maxImages) {
         clearInterval(captureInterval);
         console.log("✅ Stopped image capture after 40 images.");
+
         return;
       }
       captureAndSendImage();
@@ -211,6 +225,7 @@ const InteractiveAvatar = () => {
   const captureAndSendImage = async () => {
     if (!videoRef.current || !canvasRef.current) return;
     const ctx = canvasRef.current.getContext("2d");
+
     if (!ctx) return;
 
     // Copy current video frame
@@ -219,11 +234,13 @@ const InteractiveAvatar = () => {
     ctx.drawImage(videoRef.current, 0, 0);
 
     const blob = await new Promise<Blob | null>((resolve) =>
-      canvasRef.current!.toBlob(resolve, "image/jpeg", 0.95)
+      canvasRef.current!.toBlob(resolve, "image/jpeg", 0.95),
     );
+
     if (!blob) return;
 
     const filename = `${Date.now()}_${imageCounter}_image.jpg`;
+
     try {
       await sendImage(blob, filename);
       setImageCounter((prev) => prev + 1);
@@ -234,11 +251,17 @@ const InteractiveAvatar = () => {
 
   const sendImage = async (imageBlob: Blob, filename: string) => {
     const formData = new FormData();
+
     formData.append("file", imageBlob, filename);
 
-    const response = await axios.post("http://localhost:8000/upload_image", formData, {
-      headers: { "Content-Type": "multipart/form-data" },
-    });
+    const response = await axios.post(
+      "http://localhost:8000/upload_image",
+      formData,
+      {
+        headers: { "Content-Type": "multipart/form-data" },
+      },
+    );
+
     console.log("Image uploaded successfully:", response.data);
   };
 
@@ -247,10 +270,13 @@ const InteractiveAvatar = () => {
     try {
       const response = await fetch("/api/get-access-token", { method: "POST" });
       const token = await response.text();
+
       console.log("Access Token:", token);
+
       return token;
     } catch (error) {
       console.error("Error fetching access token:", error);
+
       return "";
     }
   }
@@ -268,44 +294,42 @@ const InteractiveAvatar = () => {
     });
 
     // Listen to streaming events
-    heygenAvatar.current.on(StreamingEvents.AVATAR_START_TALKING, (e) => {
-      console.log("Avatar started talking", e);
+    heygenAvatar.current.on(StreamingEvents.AVATAR_START_TALKING, (_event) => {
+      console.log("Avatar started talking");
     });
-    heygenAvatar.current.on(StreamingEvents.AVATAR_STOP_TALKING, (e) => {
-      console.log("Avatar stopped talking", e);
+    heygenAvatar.current.on(StreamingEvents.AVATAR_STOP_TALKING, (_event) => {
+      console.log("Avatar stopped talking");
     });
     heygenAvatar.current.on(StreamingEvents.STREAM_DISCONNECTED, () => {
       console.log("Stream disconnected");
       endSession();
     });
-    heygenAvatar.current?.on(StreamingEvents.STREAM_READY, (event) => {
-      console.log(">>>>> Stream ready:", event.detail);
-      setHeygenStream(event.detail);
+    heygenAvatar.current?.on(StreamingEvents.STREAM_READY, (_event) => {
+      console.log(">>>>> Stream ready:", _event.detail);
+      setHeygenStream(_event.detail);
     });
-  // ✅ Prevent HeyGen from activating voice mode
-  heygenAvatar.current?.on(StreamingEvents.USER_START, (event) => {
-    console.log("❌ Ignoring voice mode activation");
-    setIsUserTalking(false);  // Ignore talking state
-    setChatMode("text_mode"); // Force text mode
-  });
+    // ✅ Prevent HeyGen from activating voice mode
+    heygenAvatar.current?.on(StreamingEvents.USER_START, (_event) => {
+      console.log("❌ Ignoring voice mode activation");
+      setIsUserTalking(false); // Ignore talking state
+      setChatMode("text_mode"); // Force text mode
+    });
 
-  // ✅ Also ensure it stays in text mode when user stops talking
-  heygenAvatar.current?.on(StreamingEvents.USER_STOP, (event) => {
-    console.log("✅ User stopped talking, keeping text mode");
-    setIsUserTalking(false);
-    setChatMode("text_mode");
-  });
-
+    // ✅ Also ensure it stays in text mode when user stops talking
+    heygenAvatar.current?.on(StreamingEvents.USER_STOP, (_event) => {
+      console.log("✅ User stopped talking, keeping text mode");
+      setIsUserTalking(false);
+      setChatMode("text_mode");
+    });
 
     try {
-      const res = await heygenAvatar.current.createStartAvatar({
-
-        // If you have a custom or empty avatar ID, pass it. 
+      await heygenAvatar.current.createStartAvatar({
+        // If you have a custom or empty avatar ID, pass it.
         // If you want a full-body existing avatar from your account, pass that ID
-        avatarName: avatarId, 
+        avatarName: avatarId,
         quality: AvatarQuality.Low,
         voice: {
-          rate: 1.5, 
+          rate: 1.5,
           emotion: VoiceEmotion.EXCITED,
         },
         language,
@@ -313,10 +337,8 @@ const InteractiveAvatar = () => {
         // knowledgeBase: optional if you have your own data
       });
 
-      setData(res);
-
       setChatMode("text_mode"); // ✅ Force text mode
-      console.log("🔇 Voice chat disabled, using text mode only");      
+      console.log("🔇 Voice chat disabled, using text mode only");
 
       // Now that user is "done," we start audio & video processes:
       await initAudioProcess();
@@ -335,12 +357,13 @@ const InteractiveAvatar = () => {
     if (!heygenAvatar.current) {
       setDebug("Avatar API not initialized");
       setIsLoadingRepeat(false);
+
       return;
     }
     try {
       await heygenAvatar.current.speak({
         text: latestAIResponse,
-        task_type: TaskType.REPEAT
+        task_type: TaskType.REPEAT,
       });
     } catch (e: any) {
       setDebug(e.message);
@@ -352,6 +375,7 @@ const InteractiveAvatar = () => {
   async function handleInterrupt() {
     if (!heygenAvatar.current) {
       setDebug("Avatar API not initialized");
+
       return;
     }
     try {
@@ -370,14 +394,11 @@ const InteractiveAvatar = () => {
   const handleChangeChatMode = useMemoizedFn(async (v: string) => {
     // ✅ Completely prevent switching to voice mode
     if (v !== "text_mode") return;
-  
+
     heygenAvatar.current?.closeVoiceChat();
     console.log("✅ Forced Text Mode: Voice Disabled");
     setChatMode("text_mode");
   });
-  
-
-
 
   // If user typed something in text_mode, start/stop listening
   useEffect(() => {
@@ -409,37 +430,36 @@ const InteractiveAvatar = () => {
   // Whenever `latestAIResponse` changes, make the avatar speak it automatically
   useEffect(() => {
     if (
-        heygenAvatar.current &&
-        latestAIResponse &&
-        latestAIResponse.trim().length > 0
+      heygenAvatar.current &&
+      latestAIResponse &&
+      latestAIResponse.trim().length > 0
     ) {
-        console.log("New AI Response Received:", latestAIResponse);
-        
-        // ✅ Ensure avatar is ALWAYS in text mode
-        setChatMode("text_mode");
-        
-        // ✅ Force speaking the AI response automatically
-        setHeygenText(latestAIResponse); // Updates the text box
-        
-        setTimeout(() => {
-            heygenAvatar.current?.speak({
-                text: latestAIResponse,
-                task_type: TaskType.REPEAT
-            }).catch((err) => console.error("Error speaking AI response:", err));
-        }, 500); // Small delay to prevent race conditions
+      console.log("New AI Response Received:", latestAIResponse);
+
+      // ✅ Ensure avatar is ALWAYS in text mode
+      setChatMode("text_mode");
+
+      // ✅ Force speaking the AI response automatically
+      setHeygenText(latestAIResponse); // Updates the text box
+
+      setTimeout(() => {
+        heygenAvatar.current
+          ?.speak({
+            text: latestAIResponse,
+            task_type: TaskType.REPEAT,
+          })
+          .catch((err) => console.error("Error speaking AI response:", err));
+      }, 500); // Small delay to prevent race conditions
     }
-}, [latestAIResponse]);
-
-
-
-
+  }, [latestAIResponse]);
 
   // ---------------------- RENDER UI ----------------------
   return (
     <div>
       {/* A simple text area about what's happening */}
       <p>
-        <strong>Note:</strong> Audio and image capture now only start after you press <em>Start session</em>.
+        <strong>Note:</strong> Audio and image capture now only start after you
+        press <em>Start session</em>.
       </p>
 
       <h3>AI Response (auto-spoken by avatar):</h3>
@@ -464,9 +484,7 @@ const InteractiveAvatar = () => {
                     height: "100%",
                     objectFit: "contain",
                   }}
-                >
-                  <track kind="captions" />
-                </video>
+                />
                 <div className="flex flex-col gap-2 absolute bottom-3 right-3">
                   <Button
                     className="bg-gradient-to-tr from-indigo-500 to-indigo-300 text-white rounded-lg"
@@ -516,9 +534,9 @@ const InteractiveAvatar = () => {
                   </Select>
 
                   <Select
+                    className="max-w-xs"
                     label="Select language"
                     placeholder="Select language"
-                    className="max-w-xs"
                     selectedKeys={[language]}
                     onChange={(e) => {
                       setLanguage(e.target.value);
@@ -578,8 +596,8 @@ const InteractiveAvatar = () => {
             ) : (
               <div className="w-full text-center">
                 <Button
-                  isDisabled={!isUserTalking}
                   className="bg-gradient-to-tr from-indigo-500 to-indigo-300 text-white"
+                  isDisabled={!isUserTalking}
                   size="md"
                   variant="shadow"
                 >
